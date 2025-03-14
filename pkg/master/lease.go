@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pkg/common"
+	"github.com/sauravfouzdar/pkg/common"
 )
 
 /*
