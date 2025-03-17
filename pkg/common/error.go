@@ -12,6 +12,7 @@ var (
 	ErrNoAvailableChunkServer	= errors.New("no available chunkserver")
 	ErrStaleChunk				= errors.New("stale chunk")
 	ErrLeaseExpired				= errors.New("lease expired")
+	ErrLeaseNotFound			= errors.New("lease not found")
 	ErrInvalidOffset			= errors.New("invalid offset")
 	ErrInvalidArgument			= errors.New("invalid argument")
 	ErrRPCFailed				= errors.New("RPC failed")

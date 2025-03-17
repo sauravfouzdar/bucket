@@ -25,12 +25,11 @@ type ReplicaID struct {
 	Address		string
 }
 
-
 // ChunkMetadata is metadata for a chunk 
 type ChunkMetadata struct {
 	Username		ChunkUsername
 	FileID			FileID
-	Index			ChunkIndex
+	Index			ChunkIndex // position of the chunk in the file 
 	Version			ChunkVersion
 	Size			uint64
 	Checksum		uint64
