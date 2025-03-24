@@ -212,7 +212,8 @@ func (sm *StorageManager) UpdateMetadata(username common.ChunkUsername, version 
 	_, err = file.WriteAt(buff[:], 0)
 	return err
 }
-// GetStats
+
+// GetStats returns storage stats
 func (sm *StorageManager) GetStats() (int, int) {
 	var stat syscall.Statfs_t
 
