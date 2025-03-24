@@ -1,6 +1,14 @@
 # Bucket 
 Bucket is a naive implementation of GFS distributed file system that supports basic file operations like read, write, and delete. This project is to gain better understanding of distributed storage systems.
- 
+
+## Architecture
+![architecture](https://github.com/sauravfouzdar/bucket/blob/master/diagram.png?raw=true)
+
+### TBD:
+- [ ] Add checksum
+- [ ] Add logging
+- [ ] Improve error handling
+
 ## Project Structure:
 
 ```
@@ -33,3 +41,8 @@ Bucket is a naive implementation of GFS distributed file system that supports ba
          └── chunk_rpc.go    # Chunk server RPC definitions
 
 ```
+
+### Note - Please change file permissions as per your OS other than Linux
+
+### References:
+- [Paper](https://gist.github.com/nficano/d6dcb1c5c3dccbfdbc85d39d4fa16323)
