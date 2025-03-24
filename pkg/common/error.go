@@ -17,5 +17,7 @@ var (
 	ErrInvalidArgument			= errors.New("invalid argument")
 	ErrRPCFailed				= errors.New("RPC failed")
 	ErrTimeout					= errors.New("operation timeout")
+	ErrChecksumMismatch			= errors.New("checksum mismatch")
+	ErrInvalidChunkVersion		= errors.New("invalid chunk version")
 )
 

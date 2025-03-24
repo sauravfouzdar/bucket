@@ -2,6 +2,7 @@ package common
 
 import (
 	"time"
+	"hash/crc32"
 )
 
 
@@ -76,3 +77,7 @@ const (
 	StatusNoLease
 	StatusNotFound
 )
+
+func CheckSum(data []byte) uint64 {
+	return crc32.ChecksumIEEE(data)
+}
