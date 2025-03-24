@@ -42,7 +42,5 @@ Bucket is a naive implementation of GFS distributed file system that supports ba
 
 ```
 
-### Note - Please change file permissions as per your OS other than Linux
-
-### References:
+## References:
 - [Paper](https://gist.github.com/nficano/d6dcb1c5c3dccbfdbc85d39d4fa16323)
