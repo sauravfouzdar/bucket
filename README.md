@@ -17,11 +17,15 @@ Bucket is a naive implementation of GFS distributed file system that supports ba
  │   │   └── main.go         # Master node entry point
  │   └── chunkserver
  │       └── main.go         # Chunk server entry point
+ |   └── client
+ │       └── main.go         # Client entry point
  ├── pkg
  │   ├── master              # Master server implementation
- │   │   ├── master.go       # Master server core
+ │   │   ├── server.go       # Master server core
  │   │   ├── metadata.go     # Metadata management
  │   │   └── lease.go        # Chunk lease management
+ |   │   ├── namespace.go    # Chunk server implementation
+ |   |   |__ log.go          # Chunk server log management
  │   ├── chunkserver         # Chunk server implementation
  │   │   ├── server.go       # Chunk server core
  │   │   ├── chunk.go        # Chunk management
@@ -31,14 +35,19 @@ Bucket is a naive implementation of GFS distributed file system that supports ba
  │   │   ├── error.go        # Error definitions
  │   │   └── config.go       # Configuration
  │   └── client              # Client library implementation
- │       ├── client.go       # Client API
- │       ├── read.go         # Read operations
- │       └── write.go        # Write operations
+ │       ├── client.go       # Client core
+ │       ├── read.go         # Read operations-
+ │       └── write.go        # Write operations-
+ |       └── file.go         # file operations
+ |       └── cache.go        # client-side caching
  └── internal
      └── rpc                 # RPC implementation
          ├── rpc.go          # RPC utilities
          ├── master_rpc.go   # Master RPC definitions
          └── chunk_rpc.go    # Chunk server RPC definitions
+ |__proto
+     ├── master.proto        # Master RPC definitions
+     └── chunk.proto         # Chunk server RPC definitions
 
 ```
 

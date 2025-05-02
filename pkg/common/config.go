@@ -16,6 +16,7 @@ type ChunkServerConfig struct {
 	StorageRoot			string
 	HeartbeatInterval	int // seconds
 	MaxChunks			int // max no. of chunks a chunkserver can store
+	CacheTimeout		int // seconds
 }
 
 type ClientConfig struct {
@@ -25,6 +26,7 @@ type ClientConfig struct {
 
 // Default configurations
 var (
+	
 	DefaultMasterConfig = MasterConfig{
 		Address:			"localhost:8000",
 		HeartbeatInterval:	5,
@@ -34,7 +36,7 @@ var (
 	}
 
 	DefaultChunkServerConfig = ChunkServerConfig{
-		MasterConfig:		="localhost:8001",
+		MasterAddress:		"localhost:8001",
 		StorageRoot:		"/tmp/chunks",
 		HeartbeatInterval:	5,
 		MaxChunks:			100,

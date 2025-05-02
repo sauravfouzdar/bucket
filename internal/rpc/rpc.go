@@ -22,3 +22,17 @@ func NewServer() *Server {
 func (s *Server) Register(rcvr interface{}) error {
 	return s.Server.Register(rcvr)
 }
+
+// Serve starts the RPC server
+func (s *Server) Serve(listener net.Listener) {
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			log.Printf("Failed to accept connection: %v", err)
+			continue
+		}
+
+		go s.Server.ServeConn(conn)
+	}
+}
+
