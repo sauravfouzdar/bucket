@@ -10,11 +10,13 @@ import (
 
 	"github.com/sauravfouzdar/bucket/pkg/common"
 	"github.com/sauravfouzdar/bucket/pkg/chunkserver"
+
 )
 
 func main() {
-	// Parse command line flags
+
 	addr := flag.String("addr", common.DefaultChunkServerConfig.Address, "Chunk server address")
+
 	masterAddr := flag.String("master", common.DefaultChunkServerConfig.MasterAddress, "Master address")
 	storageRoot := flag.String("root", "/tmp/chunks", "Storage root directory")
 	heartbeatInterval := flag.Int("heartbeat", common.DefaultChunkServerConfig.HeartbeatInterval, "Heartbeat interval in seconds")
@@ -28,6 +30,7 @@ func main() {
 		StorageRoot:      	*storageRoot,
 		HeartbeatInterval: 	*heartbeatInterval,
 		MaxChunks:        	*maxChunks,
+
 	}
 
 	// Create and start chunk server

@@ -33,5 +33,3 @@ func (ms *MasterService) CreateFile(args *CreateFileArgs, reply *CreateFileReply
 	return nil
 }
 
-// tbd
-
