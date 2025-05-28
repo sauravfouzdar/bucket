@@ -3,30 +3,67 @@ package chunkserver
 import (
 	"context"
 	"time"
+	"sync"
+	"net"
+	"net/rpc"
+	"log"
+	"fmt"
+	"os"
 
-	"github.com/sauravfouzdar/pkg/common"
+	"github.com/sauravfouzdar/bucket/pkg/common"
 )
 
 // ChunkServer represents a chunk server
 type ChunkServer struct {
-	config 		common.ChunkServerConfig
+	config 			common.ChunkServerConfig
+	ID 				common.ServerID
+	Address 		string
+	MasterAddress 	string
 
-	storageManager 	*StorageManager
+	storage 	*ChunkStorage // storage management
+	replicator 	*ReplicaManager // replicator management
 
-	chunks 		map[common.ChunkUsername]*Chunk
-	chunkMutex 		sync.RWMutex
+	mu 		sync.RWMutex // mutex for concurrent access
 
-	// mutation queue
-	mutations 	map[common.ChunkUsername][]common.Mutation
-	mutationMutex 	sync.RWMutex
-
-	// Server state
-	isHealthy 	bool
-	shutdown 	chan struct{}
-
-	// RPC server
-	rpcServer 	*rpc.Server
 }
+
+// ChunkStorage manages chunk storage on disk
+type ChunkStorage struct {
+	BaseDir 	string
+	Chunks 		map[common.ChunkUsername]*ChunkData
+	mu 			sync.RWMutex // mutex for concurrent access
+}
+
+// ChunkData represents the data and metadata of a chunk
+type ChunkData struct {
+	Metadata 	common.ChunkMetadata
+	Path 		string // Path on disk
+	DataFile 	*os.File
+	MetadataFile *os.File
+}
+
+// ReplicaManager handles chunk replication
+type ReplicaManager struct {
+	server 		*ChunkServer
+	pending 	map[common.ChunkUsername]*ReplicationTask
+	mu 		sync.Mutex // mutex for concurrent access
+}
+
+// ReplicationTask represents a pending replication task
+type ReplicationTask struct {
+	ChunkUsername 	common.ChunkUsername
+	Source 			common.ServerID
+	Destination 	common.ServerID
+	StartTime 		time.Time
+}
+
+// ChunkChecksum handles checksum generation and verification
+type ChunkChecksum struct {
+	Data []byte // Checksum data
+	isValid bool // Checksum validity
+}
+
+
 
 // NewChunkServer creates a new chunk server
 func NewChunkServer(config common.ChunkServerConfig) *ChunkServer {
@@ -36,7 +73,7 @@ func NewChunkServer(config common.ChunkServerConfig) *ChunkServer {
 		chunks: make(map[common.ChunkUsername]*Chunk),
 		mutations: make(map[common.ChunkUsername][]common.Mutation),
 		shutdown: make(chan struct{}),
-	}, nil
+	}
 }
 
 // Start initializes the chunk server
@@ -50,7 +87,7 @@ func (cs *ChunkServer) Start() error {
 
 	// register chunks in memory
 	for _, username := range usernames {
-		chunk, err := cs.loadchunk(username)
+		chunk, err := cs.loadChunk(username)
 		if err != nil {
 			log.Printf("Failed to load chunk %d: %v", username, err)
 		}
@@ -61,7 +98,7 @@ func (cs *ChunkServer) Start() error {
 	}
 
 	// start RPC server
-	listner, err := net.Listen("tcp", cs.config.Address)
+	listner, err := net.Listen("tcp", cs.config.MasterAddress)
 	if err != nil {
 		return err
 	}
@@ -70,10 +107,10 @@ func (cs *ChunkServer) Start() error {
 	// Register rpc method
 	cs.registerRPCMethods()
 
-	go cs.rpcServer.Serve(listner)
+	go cs.rpcServer.Accept(listner)
 
 	// start heartbeat
-	go cs.sendHeartbeats()
+	go cs.SendHeartbeats()
 	go cs.applyMutations()
 
 	cs.isHealthy = true
@@ -84,7 +121,7 @@ func (cs *ChunkServer) Start() error {
 		// continue anyway
 	}
 
-	log.Printf("Chunkserver started at %s", cs.config.Address)
+	log.Printf("Chunkserver started at %s", cs.config.MasterAddress)
 	return nil
 }
 
@@ -94,12 +131,8 @@ func (cs *ChunkServer) Shutdown() error {
 	}
 
 	close(cs.shutdown)
-
-	// wait group (tbd)
-	time.Sleep(5* time.Second)
-
 	cs.isHealthy = false
-	return cs.rpcServer.Stop()
+	return nil
 }
 
 // CreateChunk create a new chunk
@@ -113,7 +146,7 @@ func (cs *ChunkServer) CreateChunk(username common.ChunkUsername, version common
 	}
 
 	// create chunk
-	chunk := NewChunk(handle, version)
+	chunk := NewChunk(username)
 
 	// write to disk
 	err := cs.storageManager.CreateChunk(username)
@@ -122,18 +155,23 @@ func (cs *ChunkServer) CreateChunk(username common.ChunkUsername, version common
 	}
 
 	// update metadata
-	err := cs.storageManager.UpdateMetadata(username, version, 0)
-	if err != nil {
-		return err
+	_err := cs.storageManager.UpdateMetadata(username, version, 0)
+	if _err != nil {
+		return _err
 	}
-	cs.chunks[hangle] = chunk
+	cs.chunks[username] = chunk
 	return nil
 }
 
+// DeleteChunk deletes a chunk
+func (cs *ChunkServer) DeleteChunk(username common.ChunkUsername) error {
+}
+		
 // ReadChunk reads data from a chunk
-func (cs *storageManager) ReadChunk(username *common.Username, offset, length, int64) ([]byte, error) {
+func (cs *ChunkServer) ReadChunk(username common.ChunkUsername, offset int64, length int64) ([]byte, error) {
 	cs.chunkMutex.RLock()
 	chunk, ok := cs.chunks[username]
+	fmt.Println(chunk)
 	cs.chunkMutex.RUnlock()
 
 	if !ok {
@@ -151,15 +189,15 @@ func (cs *storageManager) ReadChunk(username *common.Username, offset, length, i
 	}
 
 	// Read from storage
-	data, err := cs.storageManager.ReadChunk(username, offset, length)
+	data, err := cs.storageManager.readChunk(username, offset, length)
 	if err != nil {
 		return nil, err
 	}
 	// verify checksum
-	checksum := common.Checksum(data)
-	if checksum != chunk.Checksum {
-		return nil, common.ErrChecksumMismatch
-	}
+	// checksum := common.Checksum(data)
+	// if checksum != chunk.Checksum {
+	// 	return nil, common.ErrChecksumMismatch
+	// }
 	return data, nil
 }
 
@@ -205,6 +243,13 @@ func (cs *ChunkServer) WriteChunk(username common.ChunkUsername, offset uint64, 
 	return nil
 }
 
+// AppendChunk appends data to a chunk
+func (cs *ChunkServer) AppendChunk(username common.ChunkUsername, data []byte) (int64, error) {
+}
+
+// GetChunkData gets chunk data and metadata
+func (cs *ChunkServer) GetChunkData(username common.ChunkUsername) (*common.ChunkData, error) {
+}
 // ApplyMutation applies a mutation to a chunk
 func (cs *ChunkServer) ApplyMutation(username common.ChunkUsername, mutation common.Mutation) error {
 	cs.mutationMutex.Lock()
@@ -245,6 +290,7 @@ func (cs *ChunkServer) AppendChunk(username common.ChunkUsername, data []byte) (
 		log.Printf("Failed to update metadata: %v", err)
 	}
 
+	offset = int64(chunk.Size)
 	return offset, nil
 }
 
@@ -394,3 +440,17 @@ func (cs *ChunkServer) ProcessPendingMutations() {
 		delete(cs.mutations, username)
 	}
 }
+
+func (cs *ChunkServer) loadChunk(username common.ChunkUsername) (*Chunk, error) {
+	version, size, err := cs.storageManager.ReadMetadata(username)
+	if err != nil {
+		return nil, err
+	}
+
+	// create chunk
+	chunk := NewChunk(username, version)
+	chunk.Size = size
+
+	return chunk, nil
+}
+

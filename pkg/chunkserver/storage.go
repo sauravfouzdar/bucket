@@ -11,12 +11,11 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/pkg/common"
+	"github.com/sauravfouzdar/bucket/pkg/common"
 )
 
 
 type StorageManager struct {
-	
 	root string
 	mutex sync.RWMutex // for operations
 }
@@ -97,7 +96,7 @@ func (sm *StorageManager) CreateChunk(username common.ChunkUsername) error {
 	return err
 }
 // ReadChunk
-func (sm *StorageManager) ReadChunk(username common.ChunkUsername) ([]byte, error) {
+func (sm *StorageManager) readChunk(username common.ChunkUsername) ([]byte, error) {
 	sm.mutex.RLock()
 	defer sm.mutex.RUnlock()
 

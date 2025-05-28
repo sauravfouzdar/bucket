@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sauravfouzdar/pkg/common"
+	"github.com/sauravfouzdar/bucket/pkg/common"
 )
 
 /*
@@ -15,26 +15,38 @@ import (
 
 */
 
-// LeaseManager manages chunk leases
-type LeaseManager struct {
-	// Chunk username -> lease expiration
-	leases map[common.ChunkUsername]time.Time
-	mutex  sync.Mutex
+// // LeaseManager manages chunk leases
+// type LeaseManager struct {
+// 	// Chunk username -> lease expiration
+// 	leases map[common.ChunkUsername]time.Time
+// 	mutex  sync.Mutex
 
-	// default lease duration
-	leaseDuration time.Duration
-}
+// 	// default lease duration
+// 	leaseDuration time.Duration
+// }
 
 // NewLeaseManager creates a new LeaseManager
-func NewLeaseManager(duration time.Duration) *LeaseManager {
-	return &LeaseManager{
-		leases:        make(map[common.ChunkUsername]time.Time),
-		leaseDuration: duration,
-	}
+// func NewLeaseManager(duration time.Duration) *Master {
+// 	return &LeaseManager{
+// 		leases:        make(map[common.ChunkUsername]time.Time),
+// 		leaseDuration: duration,
+// 	}
+// }
+func (m *Master) startLeaseManager(){
+	m.leases = make(map[common.ChunkHandle]*Lease)
+	m.leaseDuration = 60 * time.Second
+
+	// Start a goroutine to periodically check for expired leases
+	go func() {
+		for {
+			time.Sleep(10 * time.Second)
+			m.checkLeases()
+		}
+	}()
 }
 
 // GetLease grants a lease to a chunk
-func (lm *LeaseManager) GetLease(username common.ChunkUsername) (time.Time, error) {
+func (lm *LeaseManager) grantLease(username common.ChunkUsername) (time.Time, error) {
 	lm.mutex.Lock()
 	defer lm.mutex.Unlock()
 
@@ -62,7 +74,7 @@ func (lm *LeaseManager) RenewLease(username common.ChunkUsername) (time.Time, er
 	return expiration, nil
 }
 
-// CheckLease checks if a lease is valid
+// CheckLease checks if a lease is valid periodically
 func(lm *LeaseManager) CheckLease(username common.ChunkUsername) (bool, error) {
 	lm.mutex.Lock()
 	defer lm.mutex.Unlock()
@@ -76,7 +88,7 @@ func(lm *LeaseManager) CheckLease(username common.ChunkUsername) (bool, error) {
 }
 
 // RevokeLease revokes a lease
-func (lm *LeaseManager) RevokeLease(username common.ChunkUsername) error {
+func (lm *LeaseManager) revokeLease(username common.ChunkUsername) error {
 	lm.mutex.Lock()
 	defer lm.mutex.Unlock()
 
@@ -89,3 +101,15 @@ func (lm *LeaseManager) RevokeLease(username common.ChunkUsername) error {
 	return nil
 }
 
+// LeaseExpired checks if a lease has expired
+func (lm *LeaseManager) leaseExpired(username common.ChunkUsername) bool {
+	lm.mutex.Lock()
+	defer lm.mutex.Unlock()
+
+	expiration, ok := lm.leases[username]
+	if !ok {
+		return true
+	}
+
+	return time.Now().After(expiration)
+}

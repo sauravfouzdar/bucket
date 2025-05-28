@@ -3,7 +3,7 @@ package chunkserver
 import (
 	"sync"
 
-	"github.com/sauravfouzdar/pkg/common"
+	"github.com/sauravfouzdar/bucket/pkg/common"
 )
 
 
@@ -22,6 +22,7 @@ func NewChunk(username common.ChunkUsername) *Chunk {
 		Size: 0,
 	}
 }
+
 
 
 

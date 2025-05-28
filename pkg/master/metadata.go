@@ -7,7 +7,7 @@ import (
 	"time"
 	"path/filepath"
 
-	"github.com/sauravfouzdar/pkg/common"
+	"github.com/sauravfouzdar/bucket/pkg/common"
 )
 
 // MetadataManager manages bucket metadata
@@ -21,11 +21,11 @@ type MetadataManager struct {
 	filesMutex sync.RWMutex
 
 	// chunk metadata: ChunkUsername -> ChunkMetadata
-	chunks map[common.ChunkUsername].*common.ChunkMetadata
+	chunks map[common.ChunkUsername]*common.ChunkMetadata
 	chunksMutex sync.RWMutex
 
 	// Next IDs
-	nextFileID common.FileID
+	nextFileID int
 	nextChunkUsername common.ChunkUsername
 	idMutex sync.Mutex
 
@@ -43,6 +43,54 @@ func NewMetadataManager() *MetadataManager {
 		nextChunkUsername: 1,
 		checkpointDir: "./metadata",
 	}
+}
+
+// LoadFromDisk loads metadata from disk during recovery
+func (mm *MetadataManager) LoadFromDisk() error {
+	// Create checkpoint directory if it doesn't exist
+	if err := os.MkdirAll(mm.checkpointDir, 0755); err != nil {
+		return err
+	}
+	
+	// Load namespace
+	namespaceFile := filepath.Join(mm.checkpointDir, "namespace.json")
+	if data, err := os.ReadFile(namespaceFile); err == nil {
+		if err := json.Unmarshal(data, &mm.namespace); err != nil {
+			return err
+		}
+	}
+	
+	// Load files
+	filesFile := filepath.Join(mm.checkpointDir, "files.json")
+	if data, err := os.ReadFile(filesFile); err == nil {
+		if err := json.Unmarshal(data, &mm.files); err != nil {
+			return err
+		}
+	}
+	
+	// Load chunks
+	chunksFile := filepath.Join(mm.checkpointDir, "chunks.json")
+	if data, err := os.ReadFile(chunksFile); err == nil {
+		if err := json.Unmarshal(data, &mm.chunks); err != nil {
+			return err
+		}
+	}
+	
+	// Load next IDs
+	idsFile := filepath.Join(mm.checkpointDir, "ids.json")
+	if data, err := os.ReadFile(idsFile); err == nil {
+		var ids struct {
+			NextChunkHandle common.ChunkHandle `json:"next_chunk_handle"`
+			NextFileID      int                `json:"next_file_id"`
+		}
+		if err := json.Unmarshal(data, &ids); err != nil {
+			return err
+		}
+		mm.nextChunkHandle = ids.NextChunkHandle
+		mm.nextFileID = ids.NextFileID
+	}
+	
+	return nil
 }
 
 // SaveToDisk saves metadata to disk
@@ -119,8 +167,9 @@ func (mm *MetadataManager) CreateFile(path string) (common.FileID, error) {
 
 	// generate new file ID
 	mm.idMutex.Lock()
-	fileID := common.FileID(filepath.Base(path)) + "-" + time.Now().Format("20060112-150405") + "-" +
-	mm.nextFileID++
+	fileID := common.FileID(filepath.Base(path)) + "-" + time.Now().Format("20060112-150405") + "-" + string(mm.nextFileID)
+	
+	mm.NextFileID++
 	mm.idMutex.Unlock()
 
 	now := time.Now()
@@ -138,6 +187,13 @@ func (mm *MetadataManager) CreateFile(path string) (common.FileID, error) {
 	mm.filesLock.Lock()
 	mm.files[fileID] = fileMetadata
 	mm.filesLock.Unlock()
+
+
+	mm.namespaceMutex.Lock()
+	mm.namespace[path] = fileID
+	mm.namespaceMutex.Unlock()
+
+
 
 	return fileID, nil
 }

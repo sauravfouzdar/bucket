@@ -8,8 +8,9 @@ import (
 	"syscall"
 	"log"
 
-	"github.com/sauravfouzdar/pkg/common"
-	"github.com/sauravfouzdar/pkg/master"
+	"github.com/sauravfouzdar/bucket/pkg/common"
+	"github.com/sauravfouzdar/bucket/pkg/master"
+
 )
 
 func main() {
