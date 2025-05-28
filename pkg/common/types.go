@@ -9,6 +9,9 @@ import (
 // unique global identifier for a chunk
 type ChunkUsername uint64
 
+// ServerID is a unique global identifier for a server
+type ServerID uint64
+
 // FileID is a unique global identifier for a file
 type FileID uint64
 
@@ -62,14 +65,6 @@ type FileMetadata struct {
 	CreationTime	time.Time
 	LastModified	time.Time
 }
-
-// // Mutation represents write operation
-// type Mutation struct {
-// 	Type		MutationType // create, append, delete
-// 	Offset		uint64
-// 	Data		[]byte
-// 	Timestamp	time.Time
-// }
 
 // MutationType - type of mutation operation
 type MutationType int

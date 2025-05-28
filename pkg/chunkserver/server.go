@@ -8,6 +8,7 @@ import (
 	"net/rpc"
 	"log"
 	"fmt"
+	"os"
 
 	"github.com/sauravfouzdar/bucket/pkg/common"
 )
@@ -29,7 +30,7 @@ type ChunkServer struct {
 // ChunkStorage manages chunk storage on disk
 type ChunkStorage struct {
 	BaseDir 	string
-	Chunks 		map[common.ChunkHandle]*ChunkData
+	Chunks 		map[common.ChunkUsername]*ChunkData
 	mu 			sync.RWMutex // mutex for concurrent access
 }
 
@@ -44,13 +45,13 @@ type ChunkData struct {
 // ReplicaManager handles chunk replication
 type ReplicaManager struct {
 	server 		*ChunkServer
-	pending 	map[common.ChunkHandle]*ReplicationTask
+	pending 	map[common.ChunkUsername]*ReplicationTask
 	mu 		sync.Mutex // mutex for concurrent access
 }
 
 // ReplicationTask represents a pending replication task
 type ReplicationTask struct {
-	ChunkHandle 	common.ChunkHandle
+	ChunkUsername 	common.ChunkUsername
 	Source 			common.ServerID
 	Destination 	common.ServerID
 	StartTime 		time.Time

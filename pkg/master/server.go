@@ -204,16 +204,23 @@ func (m *Master) HeartbeatHandler(address string, chunks []common.Username, capa
 
 // RegisterChunkServer registers a new chunk server
 func (m *Master) RegisterChunkServer(serverID common.ServerID,address string) error {
-}
+	m.chunkServerMutext.Lock()
+	defer m.chunkServerMutext.Unlock()
 
-// GrantLease grants a lease to a primary chunk server
-func (m *Master) GrantLease(handle common.ChunkHandle) (common.ServerID, []common.ServerID, time.Time, error) {
-}
+	if _, exists := m.chunkServers[serverID]; exists {
+		return common.ErrChunkServerAlreadyExists
+	}
 
-// RenewLease renews a lease for a chunk
-func (m *Master) RenewLease(handle common.ChunkHandle, serverID common.ServerID) error {
-}
+	m.chunkServers[serverID] = &ChunkServerInfo{
+		ID: serverID,
+		Address: address,
+		LastHeartbeat: time.Now(),
+		Chunks: []common.ChunkUsername{},
+	}
 
+	log.Printf("Chunk server %s registered with ID %d", address, serverID)
+	return nil
+}
 // periodicCheckpoint periodically saves metadata to disk
 func (m *Master) periodicCheckpoint() {
 	ticker := time.NewTicker(time.Duration(m.config.CheckpointInterval) * time.Second)

@@ -12,42 +12,69 @@ Bucket is a naive implementation of GFS distributed file system that supports ba
 ## Project Structure:
 
 ```
- ├── cmd
- │   ├── master
- │   │   └── main.go         # Master node entry point
- │   └── chunkserver
- │       └── main.go         # Chunk server entry point
- |   └── client
- │       └── main.go         # Client entry point
- ├── pkg
- │   ├── master              # Master server implementation
- │   │   ├── server.go       # Master server core
- │   │   ├── metadata.go     # Metadata management
- │   │   └── lease.go        # Chunk lease management
- |   │   ├── namespace.go    # Chunk server implementation
- |   |   |__ log.go          # Chunk server log management
- │   ├── chunkserver         # Chunk server implementation
- │   │   ├── server.go       # Chunk server core
- │   │   ├── chunk.go        # Chunk management
- │   │   └── storage.go      # Local storage management
- │   ├── common              # Common types and utilities
- │   │   ├── types.go        # Shared type definitions
- │   │   ├── error.go        # Error definitions
- │   │   └── config.go       # Configuration
- │   └── client              # Client library implementation
- │       ├── client.go       # Client core
- │       ├── read.go         # Read operations-
- │       └── write.go        # Write operations-
- |       └── file.go         # file operations
- |       └── cache.go        # client-side caching
- └── internal
-     └── rpc                 # RPC implementation
-         ├── rpc.go          # RPC utilities
-         ├── master_rpc.go   # Master RPC definitions
-         └── chunk_rpc.go    # Chunk server RPC definitions
- |__proto
-     ├── master.proto        # Master RPC definitions
-     └── chunk.proto         # Chunk server RPC definitions
+ gfs/
+├── cmd/
+│   ├── master/
+│   │   └── main.go          # Master server entry point
+│   ├── chunkserver/
+│   │   └── main.go          # Chunk server entry point
+│   └── client/
+│       └── main.go          # Client CLI/API entry point
+│
+├── pkg/
+│   ├── master/
+│   │   ├── server.go        # Master server implementation
+│   │   ├── namespace.go     # File namespace management
+│   │   ├── metadata.go      # Metadata management
+│   │   ├── chunk_manager.go # Chunk allocation and management
+│   │   └── lease_manager.go # Lease management for mutations
+│   │
+│   ├── chunkserver/
+│   │   ├── chunkserver.go   # Chunk server implementation
+│   │   ├── chunk_store.go   # Local chunk storage
+│   │   ├── checksum.go      # Data integrity checking
+│   │   └── replication.go   # Chunk replication logic
+│   │
+│   ├── client/
+│   │   ├── client.go        # Client library
+│   │   ├── cache.go         # Metadata caching
+│   │   ├── reader.go        # File reading operations
+│   │   └── writer.go        # File writing operations
+│   │
+│   ├── common/
+│   │   ├── types.go         # Shared data structures
+│   │   ├── constants.go     # System constants
+│   │   ├── errors.go        # Custom error types
+│   │   └── utils.go         # Utility functions
+│   │
+│   ├── rpc/
+│   │   ├── master_rpc.go    # Master RPC definitions
+│   │   ├── chunk_rpc.go     # Chunkserver RPC definitions
+│   │   └── protocols.go     # RPC protocol definitions
+│   │
+│   └── network/
+│       ├── transport.go     # Network transport layer
+│       └── heartbeat.go     # Heartbeat mechanism
+│
+├── internal/
+│   ├── log/
+│   │   └── logger.go        # Logging utilities
+│   └── config/
+│       └── config.go        # Configuration management
+│
+├── test/
+│   ├── integration/         # Integration tests
+│   └── benchmark/          # Performance benchmarks
+│
+├── configs/
+│   ├── master.yaml         # Master configuration
+│   ├── chunkserver.yaml    # Chunkserver configuration
+│   └── client.yaml         # Client configuration
+│
+├── go.mod
+├── go.sum
+├── Makefile
+└── README.md
 
 ```
 

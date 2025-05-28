@@ -8,7 +8,6 @@ import (
 	"syscall"
 	"log"
 
-
 	"github.com/sauravfouzdar/bucket/pkg/common"
 	"github.com/sauravfouzdar/bucket/pkg/chunkserver"
 )

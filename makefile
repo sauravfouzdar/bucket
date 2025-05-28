@@ -1,56 +1,40 @@
-```makefile
-# GFS Makefile
+.PHONY: build test clean run-master run-cluster
 
-.PHONY: all build clean test run-master run-chunkserver run-client
+# Build the raft node binary
+# build:
+# 	go build -o bin/kv-store ./examples/simple_kv
+#go build -o bin/raftnode ./cmd/raftnode
 
-# Binary names
-MASTER_BIN=gfs-master
-CHUNKSERVER_BIN=gfs-chunkserver
-CLIENT_BIN=gfs-client
 
-# Build flags
-GOFLAGS=-v
-
-# Directories
-BUILD_DIR=bin
-SRC_DIR=.
-
-all: build
-
-build: build-master build-chunkserver build-client
-
-build-master:
-	@echo "Building master server..."
-	@mkdir -p $(BUILD_DIR)
-	go build $(GOFLAGS) -o $(BUILD_DIR)/$(MASTER_BIN) $(SRC_DIR)/cmd/master
-
-build-chunkserver:
-	@echo "Building chunk server..."
-	@mkdir -p $(BUILD_DIR)
-	go build $(GOFLAGS) -o $(BUILD_DIR)/$(CHUNKSERVER_BIN) $(SRC_DIR)/cmd/chunkserver
-
-build-client:
-	@echo "Building client..."
-	@mkdir -p $(BUILD_DIR)
-	go build $(GOFLAGS) -o $(BUILD_DIR)/$(CLIENT_BIN) $(SRC_DIR)/cmd/client
-
+# Run tests
 test:
-	@echo "Running tests..."
 	go test -v ./...
 
+# Clean build artifacts
 clean:
-	@echo "Cleaning..."
-	rm -rf $(BUILD_DIR)
+	rm -rf bin/
+	rm -rf raft-data/
 
+# Run a single node
 run-master:
-	@echo "Running master server..."
-	$(BUILD_DIR)/$(MASTER_BIN) $(ARGS)
+	go run ./cmd/master/main.go --id node1 --addr localhost:8000
 
-run-chunkserver:
-	@echo "Running chunk server..."
-	$(BUILD_DIR)/$(CHUNKSERVER_BIN) $(ARGS)
+# Run a local cluster of 3 nodes
+run-chunkserver-cluster:
+	mkdir -p raft-data
+	go run ./cmd/chunkserver/main.go --id node1 --addr localhost:8001 & \
+	go run ./cmd/chunkserver/main.go --id node2 --addr localhost:8002 & \
+	go run ./cmd/chunkserver/main.go --id node3 --addr localhost:8003
 
 run-client:
-	@echo "Running client..."
-	$(BUILD_DIR)/$(CLIENT_BIN) $(ARGS)
-```
+	go run ./cmd/client/main.go --id client1 --addr localhost:3000
+
+# # Run client
+# run-client:
+# 	mkdir -p raft-data
+# 	./bin/kv-store --id node1 --addr localhost:8001 --http localhost:8081 \
+#                --peers node2=localhost:8002,node3=localhost:8003 --log-level info & \
+# 	./bin/kv-store --id node2 --addr localhost:8002 --http localhost:8082 \
+# 			   --peers node1=localhost:8001,node3=localhost:8003 --log-level info & \
+# 	./bin/kv-store --id node3 --addr localhost:8003 --http localhost:8083 \
+# 			   --peers node1=localhost:8001,node2=localhost:8002 --log-level info
