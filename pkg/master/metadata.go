@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -401,4 +403,77 @@ func (mm *MetadataManager) MarkChunkUnavailable(username common.ChunkUsername) {
 	if chunk, ok := mm.chunks[username]; ok {
 		chunk.Locations = nil
 	}
+}
+
+// applyCreateFile inserts a file with a pre-determined FileID directly into
+// the metadata maps. Used during WAL replay to avoid re-generating IDs.
+func (mm *MetadataManager) applyCreateFile(path string, fileID common.FileID) error {
+	mm.namespaceMutex.Lock()
+	defer mm.namespaceMutex.Unlock()
+
+	if _, exists := mm.namespace[path]; exists {
+		return nil // already present — idempotent
+	}
+
+	now := time.Now()
+	mm.files[fileID] = &common.FileMetadata{
+		ID:             fileID,
+		Path:           path,
+		Size:           0,
+		ChunkCount:     0,
+		ChunkUsernames: []common.ChunkUsername{},
+		CreationTime:   now,
+		LastModified:   now,
+	}
+	mm.namespace[path] = fileID
+
+	// Bump the counter past the numeric suffix embedded in the FileID
+	// (format: "name-YYYYMMDD-HHMMSS-N").
+	parts := strings.Split(string(fileID), "-")
+	if n, err := strconv.Atoi(parts[len(parts)-1]); err == nil {
+		mm.idMutex.Lock()
+		if n >= mm.nextFileID {
+			mm.nextFileID = n + 1
+		}
+		mm.idMutex.Unlock()
+	}
+	return nil
+}
+
+// applyCreateChunk inserts a chunk with a pre-determined ChunkUsername directly
+// into the metadata maps. Used during WAL replay.
+func (mm *MetadataManager) applyCreateChunk(fileID common.FileID, index common.ChunkIndex, username common.ChunkUsername) error {
+	mm.chunksMutex.Lock()
+	if _, exists := mm.chunks[username]; exists {
+		mm.chunksMutex.Unlock()
+		return nil // already present — idempotent
+	}
+	mm.chunks[username] = &common.ChunkMetadata{
+		Username:  username,
+		FileID:    fileID,
+		Index:     index,
+		Version:   1,
+		Size:      0,
+		Locations: []string{},
+	}
+	mm.chunksMutex.Unlock()
+
+	mm.filesMutex.Lock()
+	if file, ok := mm.files[fileID]; ok {
+		if int(index) >= len(file.ChunkUsernames) {
+			file.ChunkUsernames = append(file.ChunkUsernames, username)
+		} else {
+			file.ChunkUsernames[index] = username
+		}
+		file.ChunkCount = uint64(len(file.ChunkUsernames))
+	}
+	mm.filesMutex.Unlock()
+
+	// Bump nextChunkUsername past this replayed value.
+	mm.idMutex.Lock()
+	if username >= mm.nextChunkUsername {
+		mm.nextChunkUsername = username + 1
+	}
+	mm.idMutex.Unlock()
+	return nil
 }

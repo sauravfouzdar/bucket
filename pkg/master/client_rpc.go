@@ -33,6 +33,9 @@ func (m *Master) ClientCreateFile(args *CreateFileArgs, reply *CreateFileReply) 
 	}
 	reply.FileID = fileID
 	reply.Status = common.StatusOK
+	if m.opLog != nil {
+		_ = m.opLog.AppendToLog(LogEntry{Operation: "CREATE_FILE", Path: args.Path, FileID: fileID})
+	}
 	return nil
 }
 
@@ -75,6 +78,9 @@ func (m *Master) ClientDeleteFile(args *DeleteFileArgs, reply *DeleteFileReply) 
 	}
 	_ = m.namespace.DeleteFile(args.Path)
 	reply.Status = common.StatusOK
+	if m.opLog != nil {
+		_ = m.opLog.AppendToLog(LogEntry{Operation: "DELETE_FILE", Path: args.Path})
+	}
 	return nil
 }
 
@@ -166,6 +172,14 @@ func (m *Master) ClientAllocateChunk(args *AllocateChunkArgs, reply *AllocateChu
 	reply.Locations = successAddrs
 	reply.Version = version
 	reply.Status = common.StatusOK
+	if m.opLog != nil {
+		_ = m.opLog.AppendToLog(LogEntry{
+			Operation:   "CREATE_CHUNK",
+			FileID:      info.ID,
+			ChunkIndex:  common.ChunkIndex(args.ChunkIndex),
+			ChunkHandle: handle,
+		})
+	}
 	return nil
 }
 

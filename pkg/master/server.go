@@ -1,10 +1,12 @@
 package master
 
 import (
+	"fmt"
 	"log"
 	"net"
 	netrpc "net/rpc"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -65,11 +67,13 @@ type OperationLog struct {
 
 // LogEntry represents a single operation log entry
 type LogEntry struct {
-	Timestamp   time.Time
-	Operation   string
-	Path        string
-	ChunkHandle common.ChunkHandle
-	Version     common.ChunkVersion
+	Timestamp   time.Time            `json:"timestamp"`
+	Operation   string               `json:"operation"`
+	Path        string               `json:"path,omitempty"`
+	FileID      common.FileID        `json:"file_id,omitempty"`
+	ChunkHandle common.ChunkHandle   `json:"chunk_handle,omitempty"`
+	ChunkIndex  common.ChunkIndex    `json:"chunk_index,omitempty"`
+	Version     common.ChunkVersion  `json:"version,omitempty"`
 }
 
 // Namespace holds the file system tree
@@ -104,6 +108,16 @@ func (m *Master) Start() error {
 		log.Printf("Failed to load metadata from disk: %v", err)
 	}
 
+	logPath := filepath.Join("./metadata", "oplog.jsonl")
+	opLog, err := NewOperationLog(logPath)
+	if err != nil {
+		return fmt.Errorf("failed to open operation log: %w", err)
+	}
+	m.opLog = opLog
+	if err := m.opLog.RecoverFromLog(m); err != nil {
+		log.Printf("WAL recovery warning: %v", err)
+	}
+
 	listener, err := net.Listen("tcp", m.config.Address)
 	if err != nil {
 		return err
@@ -128,8 +142,15 @@ func (m *Master) Shutdown() error {
 		return nil
 	}
 	close(m.shutdown)
-	if err := m.metadata.SaveToDisk(); err != nil {
-		log.Printf("Failed to save metadata to disk: %v", err)
+	if m.opLog != nil {
+		if err := m.opLog.Checkpoint(m); err != nil {
+			log.Printf("checkpoint on shutdown failed: %v", err)
+		}
+		m.opLog.Close()
+	} else {
+		if err := m.metadata.SaveToDisk(); err != nil {
+			log.Printf("Failed to save metadata to disk: %v", err)
+		}
 	}
 	m.isHealthy = false
 	return nil
@@ -296,8 +317,14 @@ func (m *Master) periodicCheckpoint() {
 	for {
 		select {
 		case <-ticker.C:
-			if err := m.metadata.SaveToDisk(); err != nil {
-				log.Printf("Failed to save metadata: %v", err)
+			if m.opLog != nil {
+				if err := m.opLog.Checkpoint(m); err != nil {
+					log.Printf("Failed to checkpoint: %v", err)
+				}
+			} else {
+				if err := m.metadata.SaveToDisk(); err != nil {
+					log.Printf("Failed to save metadata: %v", err)
+				}
 			}
 		case <-m.shutdown:
 			return
