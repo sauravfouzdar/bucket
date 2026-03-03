@@ -156,6 +156,9 @@ func handleRead(args []string) error {
 	if err != nil {
 		return err
 	}
+	if len(data) == 0 {
+		return fmt.Errorf("no data returned (file may be empty or not yet written)")
+	}
 	fmt.Printf("%s\n", string(data))
 	return nil
 }

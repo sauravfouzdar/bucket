@@ -238,28 +238,33 @@ func (m *Master) HandleHeartbeat(args *common.HeartbeatRequest, reply *common.He
 		info.Available = true
 	}
 
+	for _, chunk := range args.Chunks {
+		_ = m.metadata.AddChunkLocation(chunk, args.Address)
+	}
+
 	reply.Status = common.StatusOK
 	return nil
 }
 
 // RegisterChunkServer registers a new chunk server
-func (m *Master) RegisterChunkServer(serverID common.ServerID, address string) error {
+func (m *Master) RegisterChunkServer(args *struct{ Address string }, reply *struct{ Status common.Status }) error {
 	m.chunkServerMu.Lock()
 	defer m.chunkServerMu.Unlock()
 
-	if _, exists := m.chunkServers[address]; exists {
-		return common.ErrChunkServerAlreadyExists
+	if _, exists := m.chunkServers[args.Address]; exists {
+		reply.Status = common.StatusOK
+		return nil
 	}
 
-	m.chunkServers[address] = &ChunkServerInfo{
-		ID:            serverID,
-		Address:       address,
+	m.chunkServers[args.Address] = &ChunkServerInfo{
+		Address:       args.Address,
 		LastHeartbeat: time.Now(),
 		Chunks:        []common.ChunkUsername{},
 		Available:     true,
 	}
 
-	log.Printf("Chunk server registered: %s", address)
+	log.Printf("Chunk server registered: %s", args.Address)
+	reply.Status = common.StatusOK
 	return nil
 }
 
