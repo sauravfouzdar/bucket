@@ -3,269 +3,328 @@ package master
 import (
 	"log"
 	"net"
-	"context"
+	netrpc "net/rpc"
+	"os"
 	"sync"
 	"time"
 
-	"github.com/sauravfouzdar/bucket/internal/rpc"
 	"github.com/sauravfouzdar/bucket/pkg/common"
 )
 
-// Master manages entire "bucket" cluster
+// Master manages the entire bucket cluster
 type Master struct {
-	// Namespace management
-	namespace	*Namespace
-
-	// Metadata management
-	files		map[common.FileID]*FileInfo
-	chunks		map[common.ChunkHandle]*ChunkInfo
-
-	// Server management
-	chunkServers	map[common.ServerID]*ChunkInfo
-
-	// Lease management
-	leases		map[common.ChunkHandle]*Lease
-
-	// Operation log
-	opLog		*OperationLog
-
-	// Mutexes for concurrent access
-	mu		sync.RWMutex
-	namespaceMu	sync.RWMutex
-
-	// Configuration
-	config		Config
+	namespace     *Namespace
+	metadata      *MetadataManager
+	leaseManager  *LeaseManager
+	chunkServers  map[string]*ChunkServerInfo // keyed by address
+	opLog         *OperationLog
+	mu            sync.RWMutex
+	chunkServerMu sync.RWMutex
+	shutdown      chan struct{}
+	isHealthy     bool
+	rpcServer     *netrpc.Server
+	config        common.MasterConfig
 }
 
-// FileInfo extends the common FileMetadata with master-specific information
+// FileInfo extends common FileMetadata with master-specific info
 type FileInfo struct {
 	common.FileMetadata
 }
 
-// ChunkInfo extends the common ChunkMetadata with master-specific information
+// ChunkInfo extends common ChunkMetadata with lease info
 type ChunkInfo struct {
 	common.ChunkMetadata
-	PrimaryExpiration	time.Time // When primary lease expires
-	Primary		common.ServerID    // Current primary, if any
+	PrimaryExpiration time.Time
+	Primary           common.ServerID
 }
 
-// ChunkServerInfo contains information about a chunk server
+// ChunkServerInfo contains information about a registered chunk server
 type ChunkServerInfo struct {
-	ID				common.ServerID
-	Address			string
-	LastHeartbeat	time.Time
-	Chunks			[]common.ChunkUsername
-	Capacity		uint64 // total storage capacity in bytes
-	UsedSpace		uint64 // used storage space in bytes
+	ID            common.ServerID
+	Address       string
+	LastHeartbeat time.Time
+	Chunks        []common.ChunkUsername
+	Capacity      uint64
+	UsedSpace     uint64
+	Available     bool
 }
 
-// Lease represents a lease granted to a primary chunk server
+// Lease represents a primary lease granted to a chunk server
 type Lease struct {
-	Primary		common.ServerID
-	Secondaries	[]common.ServerID
-	Expiration	time.Time // When primary lease expires
+	Primary     common.ServerID
+	Secondaries []common.ServerID
+	Expiration  time.Time
 }
 
-// OperationLog represents the operation log
+// OperationLog records mutations for crash recovery
 type OperationLog struct {
-	entries	[]LogEntry
+	entries        []LogEntry
 	lastCheckpoint int
-	logFile *os.File
-}
-// LogEntry represents a single log entry
-type LogEntry struct {
-	Timestamp	time.Time
-	Operation	string
-	Path		string
-	ChunkHandle	common.ChunkHandle
-	Version		common.ChunkVersion
+	logFile        *os.File
 }
 
+// LogEntry represents a single operation log entry
+type LogEntry struct {
+	Timestamp   time.Time
+	Operation   string
+	Path        string
+	ChunkHandle common.ChunkHandle
+	Version     common.ChunkVersion
+}
+
+// Namespace holds the file system tree
 type Namespace struct {
+	mu   sync.RWMutex
 	root *NamespaceNode
 }
 
+// NamespaceNode is a node in the namespace tree
 type NamespaceNode struct {
-	Name string
+	Name        string
 	IsDirectory bool
-	FileID common.FileID // valid if !IsDirectory
-	Children map[string]*NamespaceNode // valid if IsDirectory
+	FileID      common.FileID
+	Children    map[string]*NamespaceNode
 }
 
+// NewMaster creates a new Master
 func NewMaster(config common.MasterConfig) *Master {
-	m := &Master{
-		config:			config,
-		metadata:		NewMetadataManager(),
-		leaseManager:	NewLeaseManager(time.Duration(config.LeaseTimeout) * time.Second),
-		chunkServers:	make(map[string]*ChunkServerInfo),
-		shutdown:		make(chan struct{}),
+	return &Master{
+		config:       config,
+		metadata:     NewMetadataManager(),
+		leaseManager: NewLeaseManager(time.Duration(config.LeaseTimeout) * time.Second),
+		chunkServers: make(map[string]*ChunkServerInfo),
+		shutdown:     make(chan struct{}),
+		namespace:    NewNamespace(),
 	}
-
-	return m
 }
 
-// Start starts the master
+// Start starts the master server
 func (m *Master) Start() error {
-	// load metadata from disk(recovery)
 	if err := m.metadata.LoadFromDisk(); err != nil {
 		log.Printf("Failed to load metadata from disk: %v", err)
-		// continue anyway
 	}
 
-	// start RPC server
 	listener, err := net.Listen("tcp", m.config.Address)
 	if err != nil {
 		return err
 	}
 
-	m.rpcServer = rpc.NewServer()
-	// register master service
+	m.rpcServer = netrpc.NewServer()
 	m.registerRPCMethods()
 
-	go m.rpcServer.Serve(listener)
+	go m.serveRPC(listener)
 
-	// start background tasks
 	go m.periodicCheckpoint()
 	go m.monitorChunkServers()
 
 	m.isHealthy = true
-
 	log.Printf("Master started at %s", m.config.Address)
 	return nil
 }
 
-// Shutdown stops the master
+// Shutdown stops the master gracefully
 func (m *Master) Shutdown() error {
-	// if already unhealthy
 	if !m.isHealthy {
 		return nil
 	}
 	close(m.shutdown)
-
-	// perform checkpoint before shutdown
 	if err := m.metadata.SaveToDisk(); err != nil {
 		log.Printf("Failed to save metadata to disk: %v", err)
 	}
 	m.isHealthy = false
-	return m.rpcServer.Stop()
+	return nil
 }
 
-// CreateFile creates a new file
-func (m *Master) CreateFile(path string) error {
+// CreateFile creates a new file and returns its ID
+func (m *Master) CreateFile(path string) (common.FileID, error) {
+	fileID, err := m.metadata.CreateFile(path)
+	if err != nil {
+		return "", err
+	}
+	if nsErr := m.namespace.CreateFile(path, fileID); nsErr != nil {
+		log.Printf("namespace sync warning for %s: %v", path, nsErr)
+	}
+	return fileID, nil
+}
+
+// pickChunkServers returns up to n available chunkserver addresses
+func (m *Master) pickChunkServers(n int) []string {
+	m.chunkServerMu.RLock()
+	defer m.chunkServerMu.RUnlock()
+	addrs := make([]string, 0, n)
+	for addr, info := range m.chunkServers {
+		if info.Available {
+			addrs = append(addrs, addr)
+			if len(addrs) >= n {
+				break
+			}
+		}
+	}
+	return addrs
 }
 
 // DeleteFile deletes a file
 func (m *Master) DeleteFile(path string) error {
+	return m.metadata.DeleteFile(path)
 }
 
 // GetFileInfo returns metadata for a file
-func (m *Master) GetFileInfo(path string) (*common.FileMetadata, error){
+func (m *Master) GetFileInfo(path string) (*common.FileMetadata, error) {
+	return m.metadata.GetFileMetadata(path)
 }
 
 // GetChunkHandle returns the chunk handle for a given file and chunk index
 func (m *Master) GetChunkHandle(path string, chunkIndex int) (common.ChunkHandle, error) {
+	fileID, err := m.namespace.LookupFile(path)
+	if err != nil {
+		return 0, err
+	}
+	return m.metadata.GetChunkUsername(fileID, common.ChunkIndex(chunkIndex))
 }
-// GetChunkLocations returns the locations of a chunk
+
+// GetChunkLocations returns the server addresses for a chunk
 func (m *Master) GetChunkLocations(handle common.ChunkHandle) ([]common.ChunkLocation, error) {
+	locations, err := m.metadata.GetChunkLocations(handle)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]common.ChunkLocation, len(locations))
+	for i, addr := range locations {
+		result[i] = common.ChunkLocation{ServerAddress: addr}
+	}
+	return result, nil
 }
 
 // AllocateChunk allocates a new chunk for a file
 func (m *Master) AllocateChunk(path string, chunkIndex int) (common.ChunkHandle, []common.ChunkLocation, error) {
+	fileID, err := m.namespace.LookupFile(path)
+	if err != nil {
+		return 0, nil, err
+	}
+	handle, err := m.metadata.CreateChunk(fileID, common.ChunkIndex(chunkIndex))
+	if err != nil {
+		return 0, nil, err
+	}
+	return handle, nil, nil
 }
-// ReportChunk reports a chunk from a chunk server
-func (m *Master) ReportChunk(serverID common.ServerID, handle common.ChunkHandle, version common.Version) error {
+
+// ReportChunk updates chunk info from a chunk server
+func (m *Master) ReportChunk(serverID common.ServerID, handle common.ChunkHandle, version common.ChunkVersion) error {
+	m.metadata.AddChunkLocation(handle, "")
+	return nil
 }
 
+// HandleHeartbeat handles a heartbeat from a chunk server (net/rpc compatible)
+func (m *Master) HandleHeartbeat(args *common.HeartbeatRequest, reply *common.HeartbeatReply) error {
+	m.chunkServerMu.Lock()
+	defer m.chunkServerMu.Unlock()
 
-// HandleHeartbeat handles chunk server heartbeat
-func (m *Master) HeartbeatHandler(address string, chunks []common.Username, capacity, used int64) (*HeartbeatResponse, error) {
-	m.chunkServerMutext.Lock()
-	defer m.chunkServerMutext.Unlock()
-
-	info, exists := m.chunkServers[address]
+	info, exists := m.chunkServers[args.Address]
 	if !exists {
 		info = &ChunkServerInfo{
-			Address:	address,
-			LastHeard:	time.Now(),
-			Chunks:		chunks,
-			Available:	true,
-			Capacity:	capacity,
-			UsedSpace:	used,
+			Address:       args.Address,
+			LastHeartbeat: time.Now(),
+			Chunks:        args.Chunks,
+			Capacity:      args.Capacity,
+			UsedSpace:     args.UsedSpace,
+			Available:     true,
 		}
-		m.chunkServers[address] = info
+		m.chunkServers[args.Address] = info
 	} else {
-		info.LastHeard = time.Now()
-		info.Chunks = chunks
-		info.Capacity = capacity
-		info.UsedSpace = used
+		info.LastHeartbeat = time.Now()
+		info.Chunks = args.Chunks
+		info.Capacity = args.Capacity
+		info.UsedSpace = args.UsedSpace
 		info.Available = true
 	}
+
+	reply.Status = common.StatusOK
+	return nil
 }
 
 // RegisterChunkServer registers a new chunk server
-func (m *Master) RegisterChunkServer(serverID common.ServerID,address string) error {
-	m.chunkServerMutext.Lock()
-	defer m.chunkServerMutext.Unlock()
+func (m *Master) RegisterChunkServer(serverID common.ServerID, address string) error {
+	m.chunkServerMu.Lock()
+	defer m.chunkServerMu.Unlock()
 
-	if _, exists := m.chunkServers[serverID]; exists {
+	if _, exists := m.chunkServers[address]; exists {
 		return common.ErrChunkServerAlreadyExists
 	}
 
-	m.chunkServers[serverID] = &ChunkServerInfo{
-		ID: serverID,
-		Address: address,
+	m.chunkServers[address] = &ChunkServerInfo{
+		ID:            serverID,
+		Address:       address,
 		LastHeartbeat: time.Now(),
-		Chunks: []common.ChunkUsername{},
+		Chunks:        []common.ChunkUsername{},
+		Available:     true,
 	}
 
-	log.Printf("Chunk server %s registered with ID %d", address, serverID)
+	log.Printf("Chunk server registered: %s", address)
 	return nil
 }
-// periodicCheckpoint periodically saves metadata to disk
+
+func (m *Master) registerRPCMethods() {
+	if err := m.rpcServer.Register(m); err != nil {
+		log.Printf("Failed to register RPC methods: %v", err)
+	}
+}
+
+func (m *Master) serveRPC(listener net.Listener) {
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			select {
+			case <-m.shutdown:
+				return
+			default:
+				log.Printf("Accept error: %v", err)
+				continue
+			}
+		}
+		go m.rpcServer.ServeConn(conn)
+	}
+}
+
 func (m *Master) periodicCheckpoint() {
 	ticker := time.NewTicker(time.Duration(m.config.CheckpointInterval) * time.Second)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
 			if err := m.metadata.SaveToDisk(); err != nil {
-				log.Printf("Failed to save metadata to disk: %v", err)
+				log.Printf("Failed to save metadata: %v", err)
 			}
 		case <-m.shutdown:
-			ticker.Stop()
 			return
 		}
 	}
 }
 
-// detectDeadChunkServers detects dead chunk servers
-func (m *Master) detectDeadChunkServers() {
-	m.chunkServerMutext.Lock()
-	defer m.chunkServerMutext.Unlock()
-
-	for address, info := range m.chunkServers {
-		if time.Since(info.LastHeard) > time.Duration(m.config.HeartbeatInterval)*time.Second {
-			log.Printf("Chunk server %s is dead", address)
-			// mark chunks as unavailable
-			for _, chunk := range info.Chunks {
-				m.metadata.MarkChunkUnavailable(chunk)
-			}
-			delete(m.chunkServers, address)
-		}
-	}
-}
-
-// monitorChunkServers periodically checks the health of chunk servers
 func (m *Master) monitorChunkServers() {
 	ticker := time.NewTicker(time.Duration(m.config.HeartbeatInterval) * time.Second)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
 			m.detectDeadChunkServers()
 		case <-m.shutdown:
-			ticker.Stop()
 			return
 		}
 	}
 }
 
+func (m *Master) detectDeadChunkServers() {
+	m.chunkServerMu.Lock()
+	defer m.chunkServerMu.Unlock()
 
+	deadline := time.Duration(m.config.HeartbeatInterval*3) * time.Second
+	for address, info := range m.chunkServers {
+		if time.Since(info.LastHeartbeat) > deadline {
+			log.Printf("Chunk server %s is dead", address)
+			for _, chunk := range info.Chunks {
+				m.metadata.RemoveChunkLocation(chunk, address)
+			}
+			delete(m.chunkServers, address)
+		}
+	}
+}

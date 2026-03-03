@@ -4,20 +4,20 @@ import (
 	"errors"
 )
 
-
-// Common errors - copied from GFS
+// Common errors
 var (
-	ErrFileNotFound				= errors.New("file not found")
-	ErrChunkNotFound			= errors.New("chunk not found")
-	ErrNoAvailableChunkServer	= errors.New("no available chunkserver")
-	ErrStaleChunk				= errors.New("stale chunk")
-	ErrLeaseExpired				= errors.New("lease expired")
-	ErrLeaseNotFound			= errors.New("lease not found")
-	ErrInvalidOffset			= errors.New("invalid offset")
-	ErrInvalidArgument			= errors.New("invalid argument")
-	ErrRPCFailed				= errors.New("RPC failed")
-	ErrTimeout					= errors.New("operation timeout")
-	ErrChecksumMismatch			= errors.New("checksum mismatch")
-	ErrInvalidChunkVersion		= errors.New("invalid chunk version")
+	ErrFileNotFound             = errors.New("file not found")
+	ErrFileExists               = errors.New("file already exists")
+	ErrChunkNotFound            = errors.New("chunk not found")
+	ErrNoAvailableChunkServer   = errors.New("no available chunkserver")
+	ErrChunkServerAlreadyExists = errors.New("chunk server already registered")
+	ErrStaleChunk               = errors.New("stale chunk")
+	ErrLeaseExpired             = errors.New("lease expired")
+	ErrLeaseNotFound            = errors.New("lease not found")
+	ErrInvalidOffset            = errors.New("invalid offset")
+	ErrInvalidArgument          = errors.New("invalid argument")
+	ErrRPCFailed                = errors.New("RPC failed")
+	ErrTimeout                  = errors.New("operation timeout")
+	ErrChecksumMismatch         = errors.New("checksum mismatch")
+	ErrInvalidChunkVersion      = errors.New("invalid chunk version")
 )
-

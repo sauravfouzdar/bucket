@@ -4,11 +4,12 @@ import (
 	"log"
 
 	"github.com/sauravfouzdar/bucket/pkg/common"
+	"github.com/sauravfouzdar/bucket/pkg/master"
 )
 
 // MasterService define rpc methods for master
 type MasterService struct {
-	master *Master
+	master *master.Master
 }
 
 // CreateFileArgs defines arguments for CreateFile rpc
@@ -26,10 +27,13 @@ type CreateFileReply struct {
 func (ms *MasterService) CreateFile(args *CreateFileArgs, reply *CreateFileReply) error {
 	log.Printf("CreateFile(%s)", args.Path)
 
-	fileID, status := ms.master.CreateFile(args.Path)
+	fileID, err := ms.master.CreateFile(args.Path)
+	if err != nil {
+		reply.Status = common.StatusError
+		return nil
+	}
 	reply.FileID = fileID
-	reply.Status = status
-
+	reply.Status = common.StatusOK
 	return nil
 }
 
