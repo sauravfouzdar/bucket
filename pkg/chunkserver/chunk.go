@@ -15,10 +15,10 @@ type Chunk struct {
 }
 
 // NewChunk creates a new chunk
-func NewChunk(username common.ChunkUsername) *Chunk {
+func NewChunk(username common.ChunkUsername, version common.ChunkVersion) *Chunk {
 	return &Chunk{
 		Username: username,
-		Version: 0,
+		Version: version,
 		Size: 0,
 	}
 }

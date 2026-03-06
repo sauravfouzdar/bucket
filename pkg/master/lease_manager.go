@@ -7,109 +7,114 @@ import (
 	"github.com/sauravfouzdar/bucket/pkg/common"
 )
 
-/*
-
-1. When a client wants to write to a chunk, it first asks the master for the current primary
-2. If no lease exists or it has expired, the master selects a replica as the new primary
-3. The master records the lease with an expiration time (typically 60 seconds)
-
-*/
-
-// // LeaseManager manages chunk leases
-// type LeaseManager struct {
-// 	// Chunk username -> lease expiration
-// 	leases map[common.ChunkUsername]time.Time
-// 	mutex  sync.Mutex
-
-// 	// default lease duration
-// 	leaseDuration time.Duration
-// }
-
-// NewLeaseManager creates a new LeaseManager
-// func NewLeaseManager(duration time.Duration) *Master {
-// 	return &LeaseManager{
-// 		leases:        make(map[common.ChunkUsername]time.Time),
-// 		leaseDuration: duration,
-// 	}
-// }
-func (m *Master) startLeaseManager(){
-	m.leases = make(map[common.ChunkHandle]*Lease)
-	m.leaseDuration = 60 * time.Second
-
-	// Start a goroutine to periodically check for expired leases
-	go func() {
-		for {
-			time.Sleep(10 * time.Second)
-			m.checkLeases()
-		}
-	}()
+// LeaseInfo holds complete lease state for a chunk
+type LeaseInfo struct {
+	Primary     string   // address of the primary chunkserver
+	Secondaries []string // addresses of secondary replicas
+	Expiration  time.Time
 }
 
-// GetLease grants a lease to a chunk
-func (lm *LeaseManager) grantLease(username common.ChunkUsername) (time.Time, error) {
+// LeaseManager manages primary leases for chunks
+type LeaseManager struct {
+	leases        map[common.ChunkUsername]*LeaseInfo
+	mutex         sync.Mutex
+	leaseDuration time.Duration
+}
+
+// NewLeaseManager creates a new LeaseManager
+func NewLeaseManager(duration time.Duration) *LeaseManager {
+	return &LeaseManager{
+		leases:        make(map[common.ChunkUsername]*LeaseInfo),
+		leaseDuration: duration,
+	}
+}
+
+// GrantLease grants a primary lease to a specific server for a chunk
+func (lm *LeaseManager) GrantLease(username common.ChunkUsername, primary string, secondaries []string) (time.Time, error) {
 	lm.mutex.Lock()
 	defer lm.mutex.Unlock()
 
 	expiration := time.Now().Add(lm.leaseDuration)
-	lm.leases[username] = expiration
-
+	lm.leases[username] = &LeaseInfo{
+		Primary:     primary,
+		Secondaries: secondaries,
+		Expiration:  expiration,
+	}
 	return expiration, nil
 }
 
-// RenewLease extends the existing lease
-func (lm *LeaseManager) RenewLease(username common.ChunkUsername) (time.Time, error) {
-	lm.mutex.Lock
+// GetLease returns the current lease info for a chunk, or nil if expired/missing
+func (lm *LeaseManager) GetLease(username common.ChunkUsername) *LeaseInfo {
+	lm.mutex.Lock()
 	defer lm.mutex.Unlock()
 
-	// check if lease exists
-	expiration, ok := lm.leases[username]
+	info, ok := lm.leases[username]
+	if !ok || time.Now().After(info.Expiration) {
+		return nil
+	}
+	return info
+}
+
+// RenewLease extends an existing lease
+func (lm *LeaseManager) RenewLease(username common.ChunkUsername) (time.Time, error) {
+	lm.mutex.Lock()
+	defer lm.mutex.Unlock()
+
+	info, ok := lm.leases[username]
 	if !ok {
 		return time.Time{}, common.ErrLeaseNotFound
 	}
 
-	// renew lease
-	expiration = time.Now().Add(lm.leaseDuration)
-	lm.leases[username] = expiration
-
+	expiration := time.Now().Add(lm.leaseDuration)
+	info.Expiration = expiration
 	return expiration, nil
 }
 
-// CheckLease checks if a lease is valid periodically
-func(lm *LeaseManager) CheckLease(username common.ChunkUsername) (bool, error) {
+// CheckLease reports whether a valid lease exists and returns its info
+func (lm *LeaseManager) CheckLease(username common.ChunkUsername) (bool, *LeaseInfo) {
 	lm.mutex.Lock()
 	defer lm.mutex.Unlock()
-	
-	expiration, ok := lm.leases[username]
-	if !ok {
-		return false, common.ErrLeaseNotFound
-	}
 
-	return time.Now().Before(expiration), expiration
+	info, ok := lm.leases[username]
+	if !ok {
+		return false, nil
+	}
+	return time.Now().Before(info.Expiration), info
 }
 
-// RevokeLease revokes a lease
-func (lm *LeaseManager) revokeLease(username common.ChunkUsername) error {
+// RevokeLease removes a lease
+func (lm *LeaseManager) RevokeLease(username common.ChunkUsername) error {
 	lm.mutex.Lock()
 	defer lm.mutex.Unlock()
 
-	_, ok := lm.leases[username]
-	if !ok {
+	if _, ok := lm.leases[username]; !ok {
 		return common.ErrLeaseNotFound
 	}
-
 	delete(lm.leases, username)
 	return nil
 }
 
-// LeaseExpired checks if a lease has expired
-func (lm *LeaseManager) leaseExpired(username common.ChunkUsername) bool {
+// LeaseExpired reports whether a lease has expired (or does not exist)
+func (lm *LeaseManager) LeaseExpired(username common.ChunkUsername) bool {
 	lm.mutex.Lock()
 	defer lm.mutex.Unlock()
 
-	expiration, ok := lm.leases[username]
+	info, ok := lm.leases[username]
 	if !ok {
 		return true
 	}
+	return time.Now().After(info.Expiration)
+}
 
-	return time.Now().After(expiration)
+// CleanExpired removes all expired leases
+func (lm *LeaseManager) CleanExpired() {
+	lm.mutex.Lock()
+	defer lm.mutex.Unlock()
+
+	now := time.Now()
+	for username, info := range lm.leases {
+		if now.After(info.Expiration) {
+			delete(lm.leases, username)
+		}
+	}
 }

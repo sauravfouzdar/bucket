@@ -1,12 +1,13 @@
 package chunkserver
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
-	"os"
+	"hash/crc32"
 	"io"
-	"io/fs"
-	"encoding/binary"
+	"log"
+	"os"
 	"path/filepath"
 	"sync"
 	"syscall"
@@ -14,46 +15,36 @@ import (
 	"github.com/sauravfouzdar/bucket/pkg/common"
 )
 
-
 type StorageManager struct {
-	root string
-	mutex sync.RWMutex // for operations
+	root  string
+	mutex sync.RWMutex
 }
 
 // NewStorageManager creates a new storage manager
 func NewStorageManager(root string) *StorageManager {
-	// create root directory if it doesn't exist
 	if err := os.MkdirAll(root, 0755); err != nil {
 		log.Fatalf("Failed to create root directory: %v", err)
 	}
-
-	return &StorageManager{
-		root: root,
-	}, nil
+	return &StorageManager{root: root}
 }
 
-// LoadChunks loads chunks from disk
+// LoadChunks loads chunk usernames from disk
 func (sm *StorageManager) LoadChunks() ([]common.ChunkUsername, error) {
 	sm.mutex.RLock()
 	defer sm.mutex.RUnlock()
 
 	var usernames []common.ChunkUsername
 
-	// read chunk directories
 	err := filepath.Walk(sm.root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-
-		if info.IsDir() && filepath.Ext(path) == ".chunk" {
-			// extract username from path
+		if !info.IsDir() && filepath.Ext(path) == ".chunk" {
 			filename := filepath.Base(path)
 			var username common.ChunkUsername
-			_, err := fmt.Sscanf(filename, "%d.chunk", &username)
-			if err != nil {
-				return nil // skip invalid chunk directories
+			if _, err := fmt.Sscanf(filename, "%d.chunk", &username); err != nil {
+				return nil // skip invalid files
 			}
-
 			usernames = append(usernames, username)
 		}
 		return nil
@@ -62,176 +53,158 @@ func (sm *StorageManager) LoadChunks() ([]common.ChunkUsername, error) {
 	return usernames, err
 }
 
-// CreateChunk creates a new chunk
+// CreateChunk creates a new chunk file and its metadata file
 func (sm *StorageManager) CreateChunk(username common.ChunkUsername) error {
 	sm.mutex.Lock()
 	defer sm.mutex.Unlock()
 
-	// create chunk directory
 	path := sm.getChunkPath(username)
-	file, err := os.Create(path)
+	f, err := os.Create(path)
 	if err != nil {
 		return err
 	}
-	file.Close()
+	f.Close()
 
-	// Create metadata file
 	metaPath := sm.getMetadataPath(username)
-	metaFile, err = os.Create(metaPath)
+	metaFile, err := os.Create(metaPath)
 	if err != nil {
-		return nil
-		// cleanup
 		os.Remove(path)
 		return err
 	}
 	defer metaFile.Close()
 
-	// initialize metadata
-	var buff [20]byte // 8 bytes for size, 8 bytes for version, 4 bytes for size
-	binary.LittleEndian.PutUint64(buff[:8], 0) // size
-	binary.LittleEndian.PutUint64(buff[8:16], 0) // version
-	binary.LittleEndian.PutUint32(buff[16:20], 0) // checksum
-
-	_, err = metaFile.Write(buff[:])
+	// initialize metadata: size(8) | version(8) | checksum(4)
+	var buf [20]byte
+	_, err = metaFile.Write(buf[:])
 	return err
 }
-// ReadChunk
-func (sm *StorageManager) readChunk(username common.ChunkUsername) ([]byte, error) {
+
+// readChunk reads length bytes starting at offset from a chunk file
+func (sm *StorageManager) readChunk(username common.ChunkUsername, offset uint64, length uint64) ([]byte, error) {
 	sm.mutex.RLock()
 	defer sm.mutex.RUnlock()
 
-	path, err := os.Open(sm.getChunkPath(username))
+	f, err := os.Open(sm.getChunkPath(username))
 	if err != nil {
 		return nil, err
 	}
-	defer path.Close()
+	defer f.Close()
 
-	// Seek to offset-->
-	_, err = path.Seek(offset, io.SeekStart)
-	if err != nil {
+	if _, err = f.Seek(int64(offset), io.SeekStart); err != nil {
 		return nil, err
 	}
 
-	// Read data
-	data := make([]byte, size)
-	n, err := file.Read(data)
+	data := make([]byte, length)
+	n, err := f.Read(data)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, err
 	}
 
 	return data[:n], nil
 }
-// WriteChunk
+
+// WriteChunk writes data at offset in a chunk file
 func (sm *StorageManager) WriteChunk(username common.ChunkUsername, offset uint64, data []byte) error {
 	sm.mutex.Lock()
 	defer sm.mutex.Unlock()
 
-	// Open chunk file
-	path, err := os.OpenFile(sm.getChunkPath(username), os.O_RDWR, 0644)
+	f, err := os.OpenFile(sm.getChunkPath(username), os.O_RDWR, 0644)
 	if err != nil {
 		return err
 	}
-	defer path.Close()
+	defer f.Close()
 
-	// Seek to offset
-	_, err = path.Seek(offset, io.SeekStart)
-	if err != nil {
+	if _, err = f.Seek(int64(offset), io.SeekStart); err != nil {
 		return err
 	}
 
-	// Write data
-	_, err = path.Write(data)
+	_, err = f.Write(data)
 	return err
 }
 
-// DeleteChunk
+// DeleteChunk removes the chunk file and its metadata
 func (sm *StorageManager) DeleteChunk(username common.ChunkUsername) error {
 	sm.mutex.Lock()
-	sm.mutex.Unlock()
+	defer sm.mutex.Unlock()
 
-	Chunkpath:= sm.getChunkPath(username)
-
-	if err := os.Remove(Chunkpath); err != nil {
+	if err := os.Remove(sm.getChunkPath(username)); err != nil {
 		return err
 	}
-	// delete metadata
 	metaPath := sm.getMetadataPath(username)
 	if err := os.Remove(metaPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	
 	return nil
 }
 
-// ReadMetadata
-func (sm *StorageManager) ReadMetadata(username common.ChunkUsername) (common.ChunkVersion, int64, error) {
+// ReadMetadata reads the version and size from the metadata file
+func (sm *StorageManager) ReadMetadata(username common.ChunkUsername) (common.ChunkVersion, uint64, error) {
 	sm.mutex.RLock()
 	defer sm.mutex.RUnlock()
 
-	metaPath := sm.getMetadataPath(username)
-	file, err := os.Open(metaPath)
+	f, err := os.Open(sm.getMetadataPath(username))
 	if err != nil {
 		return 0, 0, err
 	}
-	defer file.Close()
+	defer f.Close()
 
-	// read metadata
-	var buff [20]byte
-	_, err = io.ReadFull(file, buff[:])
-	if err != nil {
+	var buf [20]byte
+	if _, err = io.ReadFull(f, buf[:]); err != nil {
 		return 0, 0, err
 	}
 
-	version := common.ChunkVersion(binary.LittleEndian.Uint64(buff[8:16]))
-	size := int64(binary.LittleEndian.Uint64(buff[:8]))
+	size := binary.LittleEndian.Uint64(buf[:8])
+	version := common.ChunkVersion(binary.LittleEndian.Uint64(buf[8:16]))
 	return version, size, nil
 }
 
-// UpdateMetadata
-func (sm *StorageManager) UpdateMetadata(username common.ChunkUsername, version common.ChunkVersion, size int64) error {
+// UpdateMetadata persists version and size to the metadata file
+func (sm *StorageManager) UpdateMetadata(username common.ChunkUsername, version common.ChunkVersion, size uint64) error {
 	sm.mutex.Lock()
 	defer sm.mutex.Unlock()
 
-	metaPath := sm.getMetadataPath(username)
-	file, err := os.OpenFile(metaPath, os.O_RDWR, 0644)
-	if err != nil{
+	f, err := os.OpenFile(sm.getMetadataPath(username), os.O_RDWR, 0644)
+	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer f.Close()
 
-	// update metadata
-	var buff [20]byte
-	binary.LittleEndian.PutUint64(buff[:8], uint64(size))
-	binary.LittleEndian.PutUint64(buff[8:16], uint64(version))
+	var buf [20]byte
+	binary.LittleEndian.PutUint64(buf[:8], size)
+	binary.LittleEndian.PutUint64(buf[8:16], uint64(version))
+	binary.LittleEndian.PutUint32(buf[16:20], crc32.ChecksumIEEE(buf[:16]))
 
-	// compute checksum
-	checksum := crc32.ChecksumIEEE(buff[:16])
-	binary.LittleEndian.PutUint32(buff[16:20], checksum)
-
-	_, err = file.WriteAt(buff[:], 0)
+	_, err = f.WriteAt(buf[:], 0)
 	return err
 }
 
-// GetStats returns storage stats
-func (sm *StorageManager) GetStats() (int, int) {
+// GetStats returns total capacity and used bytes for the storage root
+func (sm *StorageManager) GetStats() (uint64, uint64, error) {
 	var stat syscall.Statfs_t
-
-	err := syscall.Statfs(sm.root, &stat)
-	if err != nil {
-		return 0, 0
+	if err := syscall.Statfs(sm.root, &stat); err != nil {
+		return 0, 0, err
 	}
 
 	capacity := stat.Blocks * uint64(stat.Bsize)
 	available := stat.Bavail * uint64(stat.Bsize)
-
-	return int64(capacity), int64(used)
+	used := capacity - available
+	return capacity, used, nil
 }
-// getChunkPath
+
+// GetBlockChecksum returns the CRC32 checksum of a 64 KB block within a chunk
+func (sm *StorageManager) GetBlockChecksum(username common.ChunkUsername, blockIndex uint64) (uint32, error) {
+	const blockSize = uint64(64 * 1024)
+	data, err := sm.readChunk(username, blockIndex*blockSize, blockSize)
+	if err != nil {
+		return 0, err
+	}
+	return crc32.ChecksumIEEE(data), nil
+}
+
 func (sm *StorageManager) getChunkPath(username common.ChunkUsername) string {
 	return filepath.Join(sm.root, fmt.Sprintf("%d.chunk", username))
 }
 
-// getMetadataPath
 func (sm *StorageManager) getMetadataPath(username common.ChunkUsername) string {
 	return filepath.Join(sm.root, fmt.Sprintf("%d.meta", username))
 }

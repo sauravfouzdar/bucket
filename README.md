@@ -8,6 +8,8 @@ Bucket is a naive implementation of GFS distributed file system that supports ba
 - [ ] Add checksum
 - [ ] Add logging
 - [ ] Improve error handling
+- [ ] Write ahead logging
+- 
 
 ## Project Structure:
 
@@ -76,6 +78,16 @@ Bucket is a naive implementation of GFS distributed file system that supports ba
 ├── Makefile
 └── README.md
 
+```
+
+## Requirements
+
+- Go 1.23+
+
+## Tests
+
+```bash
+go test ./...
 ```
 
 ## References:
