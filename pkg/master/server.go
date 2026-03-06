@@ -130,6 +130,7 @@ func (m *Master) Start() error {
 
 	go m.periodicCheckpoint()
 	go m.monitorChunkServers()
+	go m.periodicLeaseCleanup()
 
 	m.isHealthy = true
 	log.Printf("Master started at %s", m.config.Address)
@@ -259,8 +260,37 @@ func (m *Master) HandleHeartbeat(args *common.HeartbeatRequest, reply *common.He
 		info.Available = true
 	}
 
-	for _, chunk := range args.Chunks {
-		_ = m.metadata.AddChunkLocation(chunk, args.Address)
+	// Process chunk reports with stale version detection
+	if len(args.ChunkReports) > 0 {
+		for _, report := range args.ChunkReports {
+			chunkMeta, err := m.metadata.GetChunkMetadata(report.Username)
+			if err != nil {
+				continue
+			}
+			if report.Version < chunkMeta.Version {
+				// Stale replica -- schedule for deletion
+				reply.ChunksToDelete = append(reply.ChunksToDelete, report.Username)
+				log.Printf("Stale chunk %d on %s: has v%d, current v%d",
+					report.Username, args.Address, report.Version, chunkMeta.Version)
+			} else {
+				_ = m.metadata.AddChunkLocation(report.Username, args.Address)
+			}
+		}
+	} else {
+		// Fallback: old-style heartbeat without version info
+		for _, chunk := range args.Chunks {
+			_ = m.metadata.AddChunkLocation(chunk, args.Address)
+		}
+	}
+
+	// Process lease renewals
+	for _, username := range args.LeaseRenewals {
+		leaseInfo := m.leaseManager.GetLease(username)
+		if leaseInfo != nil && leaseInfo.Primary == args.Address {
+			if _, err := m.leaseManager.RenewLease(username); err == nil {
+				reply.RenewedLeases = append(reply.RenewedLeases, username)
+			}
+		}
 	}
 
 	reply.Status = common.StatusOK
@@ -339,6 +369,19 @@ func (m *Master) monitorChunkServers() {
 		select {
 		case <-ticker.C:
 			m.detectDeadChunkServers()
+		case <-m.shutdown:
+			return
+		}
+	}
+}
+
+func (m *Master) periodicLeaseCleanup() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			m.leaseManager.CleanExpired()
 		case <-m.shutdown:
 			return
 		}

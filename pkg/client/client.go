@@ -183,7 +183,9 @@ func (f *File) Close() error {
 	return nil
 }
 
-// Write writes data at the given offset, spanning chunks as needed
+// Write writes data at the given offset, spanning chunks as needed.
+// Uses the GFS lease protocol: asks master for primary, writes to primary,
+// primary forwards to secondaries.
 func (f *File) Write(offset int, data []byte) error {
 	off := uint64(offset)
 	remaining := data
@@ -192,6 +194,7 @@ func (f *File) Write(offset int, data []byte) error {
 		chunkIndex := int(off / common.ChunkSize)
 		chunkOffset := off % common.ChunkSize
 
+		// Ensure chunk exists (allocate if needed)
 		alloc, err := f.client.allocateChunk(f.path, chunkIndex)
 		if err != nil {
 			return err
@@ -205,8 +208,31 @@ func (f *File) Write(offset int, data []byte) error {
 			writeLen = common.ChunkSize - chunkOffset
 		}
 
-		if err := f.client.writeToChunkServer(alloc.Locations[0], alloc.Handle, chunkOffset, remaining[:int(writeLen)]); err != nil {
-			return err
+		// Get primary lease and write via primary with retry
+		const maxRetries = 3
+		var writeErr error
+		for attempt := 0; attempt < maxRetries; attempt++ {
+			lease, leaseErr := f.client.getPrimaryLease(alloc.Handle)
+			if leaseErr != nil {
+				writeErr = leaseErr
+				continue
+			}
+			err = f.client.writeToPrimary(
+				lease.Primary,
+				alloc.Handle,
+				lease.Version,
+				chunkOffset,
+				remaining[:int(writeLen)],
+				lease.Secondaries,
+			)
+			if err == nil {
+				writeErr = nil
+				break
+			}
+			writeErr = err
+		}
+		if writeErr != nil {
+			return writeErr
 		}
 
 		remaining = remaining[int(writeLen):]
@@ -262,6 +288,69 @@ func (f *File) Read(offset int, length int) ([]byte, error) {
 }
 
 // --- internal helpers ---
+
+type leaseResult struct {
+	Primary     string
+	Secondaries []string
+	Version     common.ChunkVersion
+}
+
+func (c *Client) getPrimaryLease(handle common.ChunkHandle) (*leaseResult, error) {
+	type args struct {
+		Handle common.ChunkHandle
+	}
+	type reply struct {
+		Primary     string
+		Secondaries []string
+		Version     common.ChunkVersion
+		Status      common.Status
+	}
+	r := &reply{}
+	if err := c.masterCall("Master.ClientGetPrimaryLease", &args{Handle: handle}, r); err != nil {
+		return nil, err
+	}
+	if r.Status != common.StatusOK {
+		return nil, fmt.Errorf("get primary lease for chunk %d: status %d", handle, r.Status)
+	}
+	return &leaseResult{
+		Primary:     r.Primary,
+		Secondaries: r.Secondaries,
+		Version:     r.Version,
+	}, nil
+}
+
+func (c *Client) writeToPrimary(primaryAddr string, handle common.ChunkHandle, version common.ChunkVersion, offset uint64, data []byte, secondaries []string) error {
+	conn, err := netrpc.Dial("tcp", primaryAddr)
+	if err != nil {
+		return fmt.Errorf("connect to primary %s: %w", primaryAddr, err)
+	}
+	defer conn.Close()
+
+	type args struct {
+		Username    common.ChunkUsername
+		Version     common.ChunkVersion
+		Offset      uint64
+		Data        []byte
+		Secondaries []string
+	}
+	type reply struct {
+		Status common.Status
+	}
+	r := &reply{}
+	if err := conn.Call("ChunkServer.RPCPrimaryWrite", &args{
+		Username:    handle,
+		Version:     version,
+		Offset:      offset,
+		Data:        data,
+		Secondaries: secondaries,
+	}, r); err != nil {
+		return fmt.Errorf("primary write: %w", err)
+	}
+	if r.Status != common.StatusOK {
+		return fmt.Errorf("primary write to chunk %d failed: status %d", handle, r.Status)
+	}
+	return nil
+}
 
 type allocResult struct {
 	Handle    common.ChunkHandle

@@ -22,6 +22,10 @@ type ChunkServer struct {
 	rpcServer      *netrpc.Server
 	shutdown       chan struct{}
 	isHealthy      bool
+	nextWriteID    common.WriteID // serial number for primary writes
+	writeIDMutex   sync.Mutex
+	primaryChunks  map[common.ChunkUsername]bool // chunks this server is primary for
+	primaryMutex   sync.RWMutex
 }
 
 // NewChunkServer creates a new chunk server
@@ -31,6 +35,7 @@ func NewChunkServer(config common.ChunkServerConfig) (*ChunkServer, error) {
 		storageManager: NewStorageManager(config.StorageRoot),
 		chunks:         make(map[common.ChunkUsername]*Chunk),
 		mutations:      make(map[common.ChunkUsername][]common.Mutation),
+		primaryChunks:  make(map[common.ChunkUsername]bool),
 		shutdown:       make(chan struct{}),
 	}, nil
 }
@@ -317,10 +322,22 @@ func (cs *ChunkServer) SendHeartbeats() {
 
 			cs.chunkMutex.RLock()
 			handles := make([]common.ChunkUsername, 0, len(cs.chunks))
-			for handle := range cs.chunks {
+			var reports []common.ChunkReport
+			for handle, chunk := range cs.chunks {
 				handles = append(handles, handle)
+				reports = append(reports, common.ChunkReport{
+					Username: handle,
+					Version:  chunk.Version,
+				})
 			}
 			cs.chunkMutex.RUnlock()
+
+			cs.primaryMutex.RLock()
+			var renewals []common.ChunkUsername
+			for handle := range cs.primaryChunks {
+				renewals = append(renewals, handle)
+			}
+			cs.primaryMutex.RUnlock()
 
 			capacity, used, statsErr := cs.storageManager.GetStats()
 			if statsErr != nil {
@@ -328,10 +345,12 @@ func (cs *ChunkServer) SendHeartbeats() {
 			}
 
 			args := &common.HeartbeatRequest{
-				Address:   cs.config.Address,
-				Chunks:    handles,
-				Capacity:  capacity,
-				UsedSpace: used,
+				Address:       cs.config.Address,
+				Chunks:        handles,
+				ChunkReports:  reports,
+				Capacity:      capacity,
+				UsedSpace:      used,
+				LeaseRenewals: renewals,
 			}
 			reply := &common.HeartbeatReply{}
 
@@ -357,6 +376,20 @@ func (cs *ChunkServer) SendHeartbeats() {
 					}
 					if len(reply.ChunksToReplicate) > 0 {
 						go cs.replicateChunks(reply.ChunksToReplicate)
+					}
+					// Update primary status based on lease renewal responses
+					if len(renewals) > 0 {
+						renewedSet := make(map[common.ChunkUsername]bool)
+						for _, h := range reply.RenewedLeases {
+							renewedSet[h] = true
+						}
+						cs.primaryMutex.Lock()
+						for h := range cs.primaryChunks {
+							if !renewedSet[h] {
+								delete(cs.primaryChunks, h)
+							}
+						}
+						cs.primaryMutex.Unlock()
 					}
 				}
 			case <-ctx.Done():

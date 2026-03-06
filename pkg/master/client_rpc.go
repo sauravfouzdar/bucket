@@ -7,6 +7,96 @@ import (
 	"github.com/sauravfouzdar/bucket/pkg/common"
 )
 
+// --- GetPrimaryLease ---
+
+type GetPrimaryLeaseArgs struct {
+	Handle common.ChunkHandle
+}
+
+type GetPrimaryLeaseReply struct {
+	Primary     string
+	Secondaries []string
+	Version     common.ChunkVersion
+	Status      common.Status
+}
+
+func (m *Master) ClientGetPrimaryLease(args *GetPrimaryLeaseArgs, reply *GetPrimaryLeaseReply) error {
+	// 1. Check if a valid lease already exists
+	leaseInfo := m.leaseManager.GetLease(args.Handle)
+	if leaseInfo != nil {
+		chunkMeta, err := m.metadata.GetChunkMetadata(args.Handle)
+		if err != nil {
+			reply.Status = common.StatusNotFound
+			return nil
+		}
+		reply.Primary = leaseInfo.Primary
+		reply.Secondaries = leaseInfo.Secondaries
+		reply.Version = chunkMeta.Version
+		reply.Status = common.StatusOK
+		return nil
+	}
+
+	// 2. No valid lease. Get all current replica locations.
+	locations, err := m.metadata.GetChunkLocations(args.Handle)
+	if err != nil || len(locations) == 0 {
+		reply.Status = common.StatusError
+		return nil
+	}
+
+	// 3. Increment the chunk version
+	newVersion, err := m.metadata.UpdateChunkVersion(args.Handle)
+	if err != nil {
+		reply.Status = common.StatusError
+		return nil
+	}
+
+	// 4. Inform all replicas of the new version
+	var upToDate []string
+	for _, addr := range locations {
+		conn, dialErr := netrpc.Dial("tcp", addr)
+		if dialErr != nil {
+			log.Printf("dial chunkserver %s for version update: %v", addr, dialErr)
+			continue
+		}
+		gvArgs := &common.GrantVersionArgs{Username: args.Handle, NewVersion: newVersion}
+		gvReply := &common.GrantVersionReply{}
+		callErr := conn.Call("ChunkServer.RPCGrantVersion", gvArgs, gvReply)
+		conn.Close()
+		if callErr != nil || gvReply.Status != common.StatusOK {
+			log.Printf("GrantVersion on %s failed: call=%v status=%v", addr, callErr, gvReply.Status)
+			continue
+		}
+		upToDate = append(upToDate, addr)
+	}
+
+	if len(upToDate) == 0 {
+		reply.Status = common.StatusError
+		return nil
+	}
+
+	// 5. Pick primary (first up-to-date) and secondaries (rest)
+	primary := upToDate[0]
+	secondaries := upToDate[1:]
+
+	// 6. Grant lease
+	m.leaseManager.GrantLease(args.Handle, primary, secondaries)
+
+	// 7. Log the lease grant
+	if m.opLog != nil {
+		_ = m.opLog.AppendToLog(LogEntry{
+			Operation:   "GRANT_LEASE",
+			ChunkHandle: args.Handle,
+			Version:     newVersion,
+		})
+	}
+
+	reply.Primary = primary
+	reply.Secondaries = secondaries
+	reply.Version = newVersion
+	reply.Status = common.StatusOK
+	return nil
+}
+
 // --- CreateFile ---
 
 type CreateFileArgs struct {

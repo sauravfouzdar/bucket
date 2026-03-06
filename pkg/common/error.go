@@ -20,4 +20,6 @@ var (
 	ErrTimeout                  = errors.New("operation timeout")
 	ErrChecksumMismatch         = errors.New("checksum mismatch")
 	ErrInvalidChunkVersion      = errors.New("invalid chunk version")
+	ErrNotPrimary               = errors.New("this server is not the primary for the chunk")
+	ErrVersionMismatch          = errors.New("chunk version mismatch")
 )

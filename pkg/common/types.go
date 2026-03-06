@@ -29,6 +29,9 @@ type ChunkVersion uint64
 // Version is an alias for ChunkVersion
 type Version = ChunkVersion
 
+// WriteID uniquely identifies a write operation (serial number assigned by primary)
+type WriteID uint64
+
 type ReplicaID struct {
 	Username ChunkUsername
 	Address  string
@@ -107,12 +110,31 @@ const (
 	StatusNotFound
 )
 
+// ChunkReport includes version info for stale replica detection
+type ChunkReport struct {
+	Username ChunkUsername
+	Version  ChunkVersion
+}
+
+// GrantVersionArgs is sent from master to chunkserver to bump the chunk version
+type GrantVersionArgs struct {
+	Username   ChunkUsername
+	NewVersion ChunkVersion
+}
+
+// GrantVersionReply is the chunkserver's response to a version bump
+type GrantVersionReply struct {
+	Status Status
+}
+
 // HeartbeatRequest is sent from a chunkserver to the master
 type HeartbeatRequest struct {
-	Address   string
-	Chunks    []ChunkUsername
-	Capacity  uint64
-	UsedSpace uint64
+	Address       string
+	Chunks        []ChunkUsername
+	ChunkReports  []ChunkReport  // includes version for stale detection
+	Capacity      uint64
+	UsedSpace     uint64
+	LeaseRenewals []ChunkUsername // chunks where this server is primary and wants renewal
 }
 
 // HeartbeatReply is the master's response to a heartbeat
@@ -120,6 +142,7 @@ type HeartbeatReply struct {
 	Status            Status
 	ChunksToDelete    []ChunkUsername
 	ChunksToReplicate []ChunkUsername
+	RenewedLeases     []ChunkUsername // chunks whose leases were successfully renewed
 }
 
 // Checksum computes a CRC32 checksum of data
